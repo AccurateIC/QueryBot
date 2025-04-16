@@ -18,7 +18,7 @@ from schema_fetch import get_database_metadata
 
 
 # Load config from YAML
-def load_config(path="config.yaml"):
+def load_config(path="/home/chirag/querybot/config/config.yaml"):
     with open(path, "r") as file:
         return yaml.safe_load(file)
 
