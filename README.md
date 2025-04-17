@@ -55,11 +55,9 @@ This will launch the Streamlit app in your web browser.
 The project is structured as follows:
 
 ```bash 
-├── app.py              # Main Streamlit application
-├── utils.py            # Utility functions and LLM handling
-├── config.yaml         # Configuration file
-├── schema_fetch.py     # Extracts schema from MySQL database
-├── prompts.jsonl       # Prompt/response log (auto-generated)
+├── src                 # Main Streamlit application
+├── config              # Config
+├── scripts             # scripts
 ├── requirements.txt    # Python dependencies
 └── README.md           # Project documentation
 ```
@@ -67,13 +65,9 @@ The project is structured as follows:
 ## Tech Stack
 ```
 Python 3.8+
-
 Streamlit
-
 LangChain
-
 Ollama 
-
 MySQL
 ```
 
