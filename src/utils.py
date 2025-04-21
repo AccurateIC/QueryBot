@@ -1,3 +1,6 @@
+
+# utils.py
+
 import mysql.connector
 import streamlit as st
 import re
@@ -7,6 +10,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 from langchain_community.chat_models import ChatOllama
 from langchain.schema import LLMResult
 from langchain_core.callbacks.base import BaseCallbackHandler
@@ -15,7 +19,6 @@ from langchain_core.messages import HumanMessage, AIMessage
 from schema_fetch import get_database_metadata
 
 
-# Load config from YAML
 def load_config(path: str = "/home/chirag/querybot/config/config.yaml") -> Dict:
     with open(path, "r") as file:
         return yaml.safe_load(file)
@@ -50,6 +53,7 @@ class LLMCallbackHandler(BaseCallbackHandler):
 
 
 def initialize_llm() -> ChatOllama:
+
     return ChatOllama(
         model=config["llm"]["model"],
         base_url=config["llm"]["base_url"],
@@ -75,6 +79,7 @@ def connect_database(host: str, user: str, password: str, database: str, port: i
 
 
 def run_query(query: str) -> Tuple[Optional[List[Dict]], Optional[str]]:
+
     try:
         if "db" in st.session_state and st.session_state.db:
             connection, cursor = st.session_state.db
@@ -87,6 +92,13 @@ def run_query(query: str) -> Tuple[Optional[List[Dict]], Optional[str]]:
 
 
 def format_query_result(result: List[Dict]) -> str:
+            return format_query_result(result)
+        return "⚠️ Please connect to the database first."
+    except mysql.connector.Error as e:
+        return f"❌ Error executing query: {e}"
+
+
+def format_query_result(result):
     if not result:
         return "ℹ️ No results found."
     table_headers = result[0].keys()
@@ -103,13 +115,10 @@ def extract_sql_query(text: str) -> str:
     think_end = text.find("</think>")
     if think_end != -1:
         text = text[think_end + len("</think>"):]
-
-    # Try to extract SQL from markdown code block
     match = re.search(r"```sql\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
     if match:
         return match.group(1).strip()
-
-    # Try to extract SQL from plain text indication
+      
     match = re.search(r"SQL query:\s*(SELECT .*?;)", text, re.DOTALL | re.IGNORECASE)
     if match:
         return match.group(1).strip()
@@ -184,3 +193,33 @@ def get_llm_response(question: str, maintain_context: bool = True) -> str:
         return f"```sql\n{sql_query}\n```\n\n❌ Error: {error}"
     
     return f"```sql\n{sql_query}\n```\n\n{format_query_result(query_result)}"
+=======
+    return text.strip()
+
+
+def get_llm_response(question):
+    ddl, _ = get_database_metadata()
+    schema_info = f"{ddl}"
+    template = f"""You are an expert MySQL assistant. 
+Only generate the raw SQL query based on the user's question, using the given schema. 
+Do NOT explain or reason. 
+Do NOT include any markdown, backticks, or natural language. 
+Only output a single valid SQL query that can be run directly.
+Do NOT include think
+
+Table Schemas:
+{schema_info}
+
+Natural Language Question:
+{{question}}
+
+Your response:
+"""
+    prompt = ChatPromptTemplate.from_template(template)
+    chain = prompt | initialize_llm()
+
+    response = chain.invoke({"question": question})
+    sql_query = extract_sql_query(response.content.strip())
+    query_result = run_query(sql_query)
+
+    return f"```sql\n{sql_query}\n```\n\n{query_result}"
