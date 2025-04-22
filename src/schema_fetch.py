@@ -4,7 +4,7 @@ from typing import Tuple, Optional
 def get_database_metadata(
     host: str = "127.0.0.1",
     user: str = "root",
-    password: str = "hello@123",
+    password: str = "Hello@123952",
     database: str = "hrms",
     port: int = 3306
 ) -> Tuple[Optional[str], Optional[str]]:

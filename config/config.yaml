@@ -1,5 +1,5 @@
 llm:
-  base_url: "http://192.168.10.167:11434"
+  base_url: "http://192.168.10.41:11434"
   model: "cnjack/mistral-samll-3.1:24b-it-q4_K_S"
   log_path: "prompts.jsonl"
 
@@ -7,5 +7,5 @@ database:
   host: "127.0.0.1"
   port: 3306
   username: "root"
-  password: "hello@123"
+  password: "Hello@123952"
   name: "hrms"
