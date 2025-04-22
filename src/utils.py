@@ -19,7 +19,8 @@ from langchain_core.messages import HumanMessage, AIMessage
 from schema_fetch import get_database_metadata
 
 
-def load_config(path: str = "/home/chirag/querybot/config/config.yaml") -> Dict:
+# Load config from YAML
+def load_config(path="/home/chirag/Documents/QueryBot/config/config.yaml"):
     with open(path, "r") as file:
         return yaml.safe_load(file)
 
