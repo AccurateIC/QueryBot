@@ -2,7 +2,7 @@
 
 import streamlit as st
 from utils import config
-from utils import connect_database, get_llm_response
+from utils import connect_database, get_llm_response, convert_result_to_csv
 
 class MySQLChatApp:
     def __init__(self):
@@ -47,12 +47,27 @@ class MySQLChatApp:
                 st.error('Please connect to the database first.')
                 return
 
+            st.session_state.conversation_history.append({"role": "user", "content": question})
+            response, raw_result = get_llm_response(question)
+            st.session_state.conversation_history.append({"role": "assistant", "content": response})
             st.session_state.chat.append({"role": "user", "content": question})
-            response = get_llm_response(question)
             st.session_state.chat.append({"role": "assistant", "content": response})
+            st.session_state.last_result = raw_result  # Save only the data table
 
-        for chat in st.session_state.chat:
+        for i, chat in enumerate(st.session_state.chat):
             st.chat_message(chat['role']).markdown(chat['content'])
+
+            # If it's the last assistant message and has a result, show download
+            is_last_message = i == len(st.session_state.chat) - 1
+            if chat['role'] == 'assistant' and is_last_message:
+                if "last_result" in st.session_state and st.session_state.last_result:
+                    csv = convert_result_to_csv(st.session_state.last_result)
+                    st.download_button(
+                        label="⬇️ Download table as CSV",
+                        data=csv,
+                        file_name="query_results.csv",
+                        mime="text/csv"
+                    )
 
 
 if __name__ == "__main__":

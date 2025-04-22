@@ -10,7 +10,8 @@ from pathlib import Path
 from datetime import datetime, timezone
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional, Tuple
-
+import pandas as pd
+import io
 from langchain_community.chat_models import ChatOllama
 from langchain.schema import LLMResult
 from langchain_core.callbacks.base import BaseCallbackHandler
@@ -172,6 +173,16 @@ def get_llm_response(question: str, maintain_context: bool = True) -> str:
     })
 
     if error:
-        return f"```sql\n{sql_query}\n```\n\n❌ Error: {error}"
+        return f"```sql\n{sql_query}\n```\n\n❌ Error: {error}", None
 
-    return f"```sql\n{sql_query}\n```\n\n{format_query_result(query_result)}"
+    return f"```sql\n{sql_query}\n```\n\n{format_query_result(query_result)}", query_result
+
+
+
+def convert_result_to_csv(result: List[Dict]) -> Optional[bytes]:
+    if not result:
+        return None
+    df = pd.DataFrame(result)
+    output = io.StringIO()
+    df.to_csv(output, index=False)
+    return output.getvalue().encode('utf-8')
