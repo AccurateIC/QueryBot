@@ -65,7 +65,6 @@ def initialize_llm() -> ChatOllama:
 
 
 def connect_database(host: str, user: str, password: str, database: str, port: int) -> None:
-def connect_database(host: str, user: str, password: str, database: str, port: int) -> None:
     try:
         connection = mysql.connector.connect(
             host=host,
