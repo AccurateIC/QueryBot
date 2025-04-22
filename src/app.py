@@ -57,4 +57,3 @@ class MySQLChatApp:
 
 if __name__ == "__main__":
     MySQLChatApp()
-

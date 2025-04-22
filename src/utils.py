@@ -1,5 +1,3 @@
-# utils.py
-
 import mysql.connector
 import streamlit as st
 import re
@@ -8,17 +6,17 @@ import yaml
 from pathlib import Path
 from datetime import datetime, timezone
 from dataclasses import dataclass, asdict
-from typing import Any, Dict, List
-
+from typing import Any, Dict, List, Optional, Tuple
 from langchain_community.chat_models import ChatOllama
 from langchain.schema import LLMResult
 from langchain_core.callbacks.base import BaseCallbackHandler
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import HumanMessage, AIMessage
 from schema_fetch import get_database_metadata
 
 
 # Load config from YAML
-def load_config(path="/home/chirag/querybot/config/config.yaml"):
+def load_config(path: str = "/home/chirag/Documents/QueryBot/config/config.yaml") -> Dict:
     with open(path, "r") as file:
         return yaml.safe_load(file)
 
@@ -51,7 +49,7 @@ class LLMCallbackHandler(BaseCallbackHandler):
             file.write(json.dumps(asdict(event)) + "\n")
 
 
-def initialize_llm():
+def initialize_llm() -> ChatOllama:
     return ChatOllama(
         model=config["llm"]["model"],
         base_url=config["llm"]["base_url"],
@@ -59,7 +57,7 @@ def initialize_llm():
     )
 
 
-def connect_database(host, user, password, database, port):
+def connect_database(host: str, user: str, password: str, database: str, port: int) -> None:
     try:
         connection = mysql.connector.connect(
             host=host,
@@ -70,24 +68,25 @@ def connect_database(host, user, password, database, port):
         )
         cursor = connection.cursor(dictionary=True)
         st.session_state.db = (connection, cursor)
+        st.session_state.conversation_history = []  # Initialize conversation history
         st.success("✅ Database connected successfully!")
     except mysql.connector.Error as e:
         st.error(f"❌ Failed to connect: {e}")
 
 
-def run_query(query):
+def run_query(query: str) -> Tuple[Optional[List[Dict]], Optional[str]]:
     try:
         if "db" in st.session_state and st.session_state.db:
             connection, cursor = st.session_state.db
             cursor.execute(query)
             result = cursor.fetchall()
-            return format_query_result(result)
-        return "⚠️ Please connect to the database first."
+            return result, None
+        return None, "⚠️ Please connect to the database first."
     except mysql.connector.Error as e:
-        return f"❌ Error executing query: {e}"
+        return None, f"❌ Error executing query: {e}"
 
 
-def format_query_result(result):
+def format_query_result(result: List[Dict]) -> str:
     if not result:
         return "ℹ️ No results found."
     table_headers = result[0].keys()
@@ -99,45 +98,89 @@ def format_query_result(result):
     return formatted_result
 
 
-def extract_sql_query(text):
+def extract_sql_query(text: str) -> str:
+    # Remove <think> blocks if present
     think_end = text.find("</think>")
     if think_end != -1:
         text = text[think_end + len("</think>"):]
 
+    # Try to extract SQL from markdown code block
     match = re.search(r"```sql\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
     if match:
         return match.group(1).strip()
 
+    # Try to extract SQL from plain text indication
     match = re.search(r"SQL query:\s*(SELECT .*?;)", text, re.DOTALL | re.IGNORECASE)
     if match:
         return match.group(1).strip()
 
+    # Fallback to entire text if no patterns matched
     return text.strip()
 
 
-def get_llm_response(question):
+def get_llm_response(question: str, maintain_context: bool = True) -> str:
+    # Initialize conversation history if not present
+    if "conversation_history" not in st.session_state:
+        st.session_state.conversation_history = []
+
+    # Get database schema
     ddl, _ = get_database_metadata()
     schema_info = f"{ddl}"
-    template = f"""You are an expert MySQL assistant. 
-Only generate the raw SQL query based on the user's question, using the given schema. 
-Do NOT explain or reason. 
-Do NOT include any markdown, backticks, or natural language. 
-Only output a single valid SQL query that can be run directly.
-Do NOT include think
 
-Table Schemas:
-{schema_info}
+    # Prepare conversation context
+    context_messages = []
+    if maintain_context and st.session_state.conversation_history:
+        for msg in st.session_state.conversation_history[-5:]:  # Keep last 4 messages for context
+            if msg["role"] == "user":
+                context_messages.append(HumanMessage(content=msg["content"]))
+            else:
+                context_messages.append(AIMessage(content=msg["content"]))
 
-Natural Language Question:
-{{question}}
+    # Build the prompt template
+    template = """You are an expert MySQL assistant. 
+        Generate SQL queries based on the user's questions and the database schema.
+        Maintain context from previous questions when appropriate.
+        Only generate the raw SQL query unless the user asks for an explanation.
+        The query should be valid and executable against the provided schema.
 
-Your response:
-"""
+        Database Schema:
+        {schema_info}
+
+        Conversation History:
+        {history}
+
+        Current Question: {question}
+
+        Your response (SQL query only, no explanation unless asked):
+        """
+    
     prompt = ChatPromptTemplate.from_template(template)
     chain = prompt | initialize_llm()
 
-    response = chain.invoke({"question": question})
-    sql_query = extract_sql_query(response.content.strip())
-    query_result = run_query(sql_query)
+    # Format the prompt with context
+    formatted_prompt = {
+        "schema_info": schema_info,
+        "history": "\n".join([f"{msg['role']}: {msg['content']}" 
+                            for msg in st.session_state.conversation_history[-4:]]),
+        "question": question
+    }
 
-    return f"```sql\n{sql_query}\n```\n\n{query_result}"
+    # Get LLM response
+    response = chain.invoke(formatted_prompt)
+    sql_query = extract_sql_query(response.content.strip())
+
+    # Execute the query
+    query_result, error = run_query(sql_query)
+    
+    # Update conversation history
+    st.session_state.conversation_history.append({"role": "user", "content": question})
+    st.session_state.conversation_history.append({
+        "role": "assistant", 
+        "content": f"SQL Query: {sql_query}\n\nResult: {query_result if query_result else error}"
+    })
+
+    # Format the output
+    if error:
+        return f"```sql\n{sql_query}\n```\n\n❌ Error: {error}"
+    
+    return f"```sql\n{sql_query}\n```\n\n{format_query_result(query_result)}"
