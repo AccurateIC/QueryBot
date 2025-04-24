@@ -12,4 +12,4 @@ database:
 
 auth:
   username: chirag
-  password: hello123
+  password: hello
