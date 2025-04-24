@@ -1,6 +1,3 @@
-
-# utils.py
-
 import mysql.connector
 import streamlit as st
 import re
@@ -20,7 +17,6 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 from schema_fetch import get_database_metadata
 
-
 def load_config(path: str = "/home/chirag/Documents/QueryBot/config/config.yaml") -> Dict:
     with open(path, "r") as file:
         return yaml.safe_load(file)
@@ -28,17 +24,14 @@ def load_config(path: str = "/home/chirag/Documents/QueryBot/config/config.yaml"
 
 config = load_config()
 
-
 @dataclass
 class Event:
     event: str
     timestamp: str
     text: str
 
-
 def _current_time() -> str:
     return datetime.now(timezone.utc).isoformat()
-
 
 class LLMCallbackHandler(BaseCallbackHandler):
     def __init__(self, log_path: Path):
@@ -56,14 +49,12 @@ class LLMCallbackHandler(BaseCallbackHandler):
         with self.log_path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(asdict(event)) + "\n")
 
-
 def initialize_llm() -> ChatOllama:
     return ChatOllama(
         model=config["llm"]["model"],
         base_url=config["llm"]["base_url"],
         callbacks=[LLMCallbackHandler(Path(config["llm"]["log_path"]))]
     )
-
 
 def connect_database(host: str, user: str, password: str, database: str, port: int) -> None:
     try:
@@ -81,7 +72,6 @@ def connect_database(host: str, user: str, password: str, database: str, port: i
     except mysql.connector.Error as e:
         st.error(f"❌ Failed to connect: {e}")
 
-
 def run_query(query: str) -> Tuple[Optional[List[Dict]], Optional[str]]:
     try:
         if "db" in st.session_state and st.session_state.db:
@@ -93,7 +83,6 @@ def run_query(query: str) -> Tuple[Optional[List[Dict]], Optional[str]]:
     except mysql.connector.Error as e:
         return None, f"❌ Error executing query: {e}"
 
-
 def format_query_result(result: List[Dict]) -> str:
     if not result:
         return "ℹ️ No results found."
@@ -104,7 +93,6 @@ def format_query_result(result: List[Dict]) -> str:
         formatted_result += "| " + " | ".join(str(cell) for cell in row) + " |\n"
     return formatted_result
 
-
 def extract_sql_query(text: str) -> str:
     think_end = text.find("</think>")
     if think_end != -1:
@@ -112,15 +100,12 @@ def extract_sql_query(text: str) -> str:
     match = re.search(r"```sql\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
     if match:
         return match.group(1).strip()
-      
     match = re.search(r"SQL query:\s*(SELECT .*?;)", text, re.DOTALL | re.IGNORECASE)
     if match:
         return match.group(1).strip()
-
     return text.strip()
 
-
-def get_llm_response(question: str, maintain_context: bool = True) -> str:
+def get_llm_response(question: str, maintain_context: bool = True) -> Tuple[str, Optional[List[Dict]]]:
     if "conversation_history" not in st.session_state:
         st.session_state.conversation_history = []
 
@@ -176,8 +161,6 @@ def get_llm_response(question: str, maintain_context: bool = True) -> str:
         return f"```sql\n{sql_query}\n```\n\n❌ Error: {error}", None
 
     return f"```sql\n{sql_query}\n```\n\n{format_query_result(query_result)}", query_result
-
-
 
 def convert_result_to_csv(result: List[Dict]) -> Optional[bytes]:
     if not result:
