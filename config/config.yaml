@@ -13,3 +13,7 @@ database:
 auth:
   username: chirag
   password: hello
+
+chroma:
+  persist_directory: "./chroma_db"
+  collection_name: "document_store"
