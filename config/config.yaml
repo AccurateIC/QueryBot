@@ -9,3 +9,7 @@ database:
   username: "root"
   password: "Hello@123952"
   name: "hrms"
+
+auth:
+  username: chirag
+  password: hello123
