@@ -1,273 +1,271 @@
-import streamlit as st
+import os
 import tempfile
-from utils import (
-    config,
-    connect_database,
-    disconnect_database,
-    get_llm_response,
-    convert_result_to_csv,
-    process_pdf,
-    is_pdf_question
-)
-from datetime import datetime
+import base64
+import streamlit as st
+from utils import config, connect_database, get_llm_response, convert_result_to_csv
+from pdf_util import ChatPDF
 
 
-class MySQLChatApp:
+class IntegratedChatApp:
     def __init__(self):
         self.init_session()
         self.setup_ui()
 
     def init_session(self):
-        # Initialize session state if not already initialized
-        session_defaults = {
+        defaults = {
             "chat": [],
             "chat_histories": {},
             "active_chat": None,
             "logged_in": False,
-            "db_connected": False,
-            "uploaded_pdfs": [],
-            "conversation_history": []
+            "active_tab": "MySQL Chat",
+            "pdf_assistant": ChatPDF(),
+            "pdf_messages": [],
+            "pdf_processed": False,
+            "pdf_chat_histories": {},
+            "active_pdf_chat": None,
+            "uploaded_files": [],
+            "temp_file_paths": []
         }
-        
-        for key, value in session_defaults.items():
+        for key, value in defaults.items():
             if key not in st.session_state:
                 st.session_state[key] = value
 
     def setup_ui(self):
-        # Show login page if not logged in
         if not st.session_state.logged_in:
             self.show_login_page()
         else:
-            # Main page with database, PDF and chat functionality
-            self.setup_main_page()
+            st.set_page_config(page_title="QueryBot", layout="centered")
+            self.setup_tab_switcher()
+            self.setup_sidebar()
+
+            if st.session_state.active_tab == "MySQL Chat":
+                self.setup_mysql_page()
+            else:
+                self.setup_pdf_page()
+
+    def setup_tab_switcher(self):
+        tabs = ["MySQL Chat", "PDF Chat"]
+        selected_tab = st.radio("Select Mode:", tabs, horizontal=True, label_visibility="collapsed")
+
+        if selected_tab != st.session_state.active_tab:
+            st.session_state.active_tab = selected_tab
+            st.rerun()
 
     def show_login_page(self):
-        st.title("Login to MySQL Chat App")
+        st.title("Login to Integrated Chat App")
+        username = st.text_input("Username", key="login_username")
+        password = st.text_input("Password", type="password", key="login_password")
+        login_button = st.button("Login")
 
-        # Login form
-        with st.form("login_form"):
-            username = st.text_input("Username", key="login_username")
-            password = st.text_input("Password", type="password", key="login_password")
-            submitted = st.form_submit_button("Login")
-
-            if submitted:
-                if username == config["auth"]["username"] and password == config["auth"]["password"]:
-                    st.session_state.logged_in = True
-                    st.session_state.login_time = datetime.now()
-                    st.success("Login successful! Redirecting to the app...")
-                    st.rerun()
-                else:
-                    st.error("Invalid username or password!")
-
-    def setup_main_page(self):
-        st.set_page_config(page_title="Chat with MySQL DB & PDFs", layout="centered")
-        st.title("Chat with Your MySQL Database or PDF Documents")
-        self.setup_sidebar()
-        self.handle_file_upload()
-        self.handle_chat()
+        if login_button:
+            if username == config["auth"]["username"] and password == config["auth"]["password"]:
+                st.session_state.logged_in = True
+                st.success("Login successful! Redirecting to the app...")
+                st.rerun()
+            else:
+                st.error("Invalid username or password!")
 
     def setup_sidebar(self):
         with st.sidebar:
-            # Database connection section
-            with st.expander("📡 Connect to Database", expanded=True):
-                st.title('🔗 Connect to Database')
-                host = st.text_input(label="Host", key="host", value=config["database"]["host"])
-                port = st.text_input(label="Port", key="port", value=str(config["database"]["port"]))
-                username = st.text_input(label="Username", key="db_username", value=config["database"]["username"])
-                password = st.text_input(label="Password", key="db_password", type="password", value="")
-                database = st.text_input(label="Database", key="database", value=config["database"]["name"])
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("Connect", use_container_width=True):
-                        try:
-                            connect_database(
-                                host=host,
-                                user=username,
-                                password=password,
-                                database=database,
-                                port=int(port),
-                            )
-                            st.session_state.db_connected = True
-                            st.session_state.db_password = ""  # Clear password after connection
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Connection failed: {str(e)}")
-                
-                with col2:
-                    if st.session_state.db_connected:
-                        if st.button("Disconnect", use_container_width=True):
-                            disconnect_database()
-                            st.session_state.db_connected = False
-                            st.rerun()
+            if st.session_state.active_tab == "MySQL Chat":
+                with st.expander("Connect to Database", expanded=True):
+                    st.text_input("Host", key="host", value=config["database"]["host"])
+                    st.text_input("Port", key="port", value=str(config["database"]["port"]))
+                    st.text_input("Username", key="username", value=config["database"]["username"])
+                    st.text_input("Password", key="password", type="password", value=config["database"]["password"])
+                    st.text_input("Database", key="database", value=config["database"]["name"])
 
-            st.markdown("---")
+                    if st.button("Connect"):
+                        connect_database(
+                            host=st.session_state.host,
+                            user=st.session_state.username,
+                            password=st.session_state.password,
+                            database=st.session_state.database,
+                            port=st.session_state.port,
+                        )
 
-            # PDF documents section
-            with st.expander("📄 PDF Documents", expanded=False):
-                st.title("Uploaded PDFs")
-                if st.session_state.uploaded_pdfs:
-                    for pdf in st.session_state.uploaded_pdfs:
-                        st.write(f"• {pdf['name']}")
-                    if st.button("Clear All PDFs", key="clear_pdfs"):
-                        st.session_state.uploaded_pdfs = []
-                        st.rerun()
+                st.markdown("---")
+
+            st.title("Chat History")
+            if st.button("New Chat"):
+                if st.session_state.active_tab == "MySQL Chat":
+                    new_chat_name = f"SQL Chat {len(st.session_state.chat_histories) + 1}"
+                    st.session_state.chat_histories[new_chat_name] = []
+                    st.session_state.active_chat = new_chat_name
+                    st.session_state.chat = []
+                    st.session_state.conversation_history = []
                 else:
-                    st.info("No PDFs uploaded yet")
+                    new_chat_name = f"PDF Chat {len(st.session_state.pdf_chat_histories) + 1}"
+                    st.session_state.pdf_chat_histories[new_chat_name] = []
+                    st.session_state.active_pdf_chat = new_chat_name
+                    st.session_state.pdf_messages = []
+                    if st.session_state.uploaded_files:
+                        st.session_state.pdf_processed = True
+                    else:
+                        st.session_state.pdf_processed = False
+                        st.session_state.pdf_assistant.clear()
 
-            st.markdown("---")
-
-            # Chat History section
-            st.title("🗂️ Chat History")
-
-            # New Chat button to start a fresh conversation
-            if st.button("➕ New Chat"):
-                new_chat_name = f"Chat {len(st.session_state.chat_histories) + 1} - {datetime.now().strftime('%H:%M')}"
-                st.session_state.chat_histories[new_chat_name] = []
-                st.session_state.active_chat = new_chat_name
-                st.session_state.chat = []
-                st.session_state.conversation_history = []
-
-            # Display existing chat histories
-            for chat_title in list(st.session_state.chat_histories.keys()):
-                with st.expander(chat_title, expanded=(chat_title == st.session_state.active_chat)):
-                    if st.button(f"🟢 Open {chat_title}", key=f"open_{chat_title}"):
-                        st.session_state.active_chat = chat_title
-                        st.session_state.chat = st.session_state.chat_histories[chat_title]
-                        st.session_state.conversation_history = [
-                            msg for msg in st.session_state.chat if msg["role"] in ["user", "assistant"]
-                        ]
-
-    def handle_file_upload(self):
-        with st.expander("📄 Upload PDF Documents", expanded=False):
-            uploaded_files = st.file_uploader(
-                "Upload PDF files", 
-                type=["pdf"],
-                accept_multiple_files=True,
-                key="pdf_uploader"
-            )
-            
-            if uploaded_files:
-                if "uploaded_pdfs" not in st.session_state:
-                    st.session_state.uploaded_pdfs = []
-                
-                for uploaded_file in uploaded_files:
-                    # Save to temporary file
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-                        tmp.write(uploaded_file.getbuffer())
-                        file_info = {
-                            "name": uploaded_file.name,
-                            "path": tmp.name
-                        }
-                        if file_info not in st.session_state.uploaded_pdfs:
-                            st.session_state.uploaded_pdfs.append(file_info)
-                            st.success(f"Processed PDF: {uploaded_file.name}")
-
-    def handle_chat(self):
-        question = st.chat_input('💬 Ask anything about your database or PDF documents')
-        if question:
-            # Initialize chat history if this is the first question
-            if not st.session_state.active_chat:
-                new_chat_name = f"Chat {len(st.session_state.chat_histories) + 1} - {datetime.now().strftime('%H:%M')}"
-                st.session_state.chat_histories[new_chat_name] = []
-                st.session_state.active_chat = new_chat_name
-                st.session_state.chat = []
-                st.session_state.conversation_history = []
-
-            # First determine if this is a PDF question
-            is_pdf_query = is_pdf_question(question, st.session_state.get("uploaded_pdfs", []))
-            
-            if is_pdf_query:
-                self.handle_pdf_question(question)
+            if st.session_state.active_tab == "MySQL Chat":
+                for chat_title in list(st.session_state.chat_histories.keys()):
+                    with st.expander(chat_title, expanded=(chat_title == st.session_state.active_chat)):
+                        if st.button(f"Open {chat_title}", key=f"open_{chat_title}"):
+                            st.session_state.active_chat = chat_title
+                            st.session_state.chat = st.session_state.chat_histories[chat_title]
+                            st.session_state.conversation_history = [
+                                msg for msg in st.session_state.chat if msg["role"] in ["user", "assistant"]
+                            ]
             else:
-                self.handle_db_question(question)
+                for chat_title in list(st.session_state.pdf_chat_histories.keys()):
+                    with st.expander(chat_title, expanded=(chat_title == st.session_state.active_pdf_chat)):
+                        if st.button(f"Open {chat_title}", key=f"open_pdf_{chat_title}"):
+                            st.session_state.active_pdf_chat = chat_title
+                            st.session_state.pdf_messages = st.session_state.pdf_chat_histories[chat_title]
 
-            # Display the chat messages after processing
-            self.display_chat_messages()
+    def setup_mysql_page(self):
+        st.title("Database")
+        self.handle_mysql_chat()
 
-    def handle_db_question(self, question):
-        if "db" not in st.session_state or not st.session_state.db:
-            st.error('Please connect to the database first.')
-            return
-
-        # Add question to all relevant histories
-        st.session_state.conversation_history.append({"role": "user", "content": question})
-        st.session_state.chat.append({"role": "user", "content": question})
+    def handle_mysql_chat(self):
+        question = st.chat_input('Ask anything about your database')
         
-        with st.spinner("Generating response..."):
-            try:
-                response, raw_result, execution_time = get_llm_response(question)
-                
-                # Add metadata to the response
-                enhanced_response = f"{response}\n\n⏱️ Query executed in {execution_time:.2f}s"
-                if raw_result:
-                    enhanced_response += f" | 📊 {len(raw_result)} rows returned"
-                
-                st.session_state.conversation_history.append({
-                    "role": "assistant", 
-                    "content": enhanced_response
-                })
-                st.session_state.chat.append({
-                    "role": "assistant", 
-                    "content": enhanced_response
-                })
-                # Update the chat history for the active chat
-                st.session_state.chat_histories[st.session_state.active_chat] = st.session_state.chat
-                st.session_state.last_result = raw_result
-            except Exception as e:
-                st.error(f"Error processing your request: {str(e)}")
+        if question:
+            if "db" not in st.session_state or not st.session_state.db:
+                st.error('Please connect to the database first.')
+                return
 
-    def handle_pdf_question(self, question):
-        if "uploaded_pdfs" not in st.session_state or not st.session_state.uploaded_pdfs:
-            st.error('Please upload PDF documents first.')
-            return
+            # Initialize active chat if not already
+            if st.session_state.active_chat is None:
+                new_chat_name = f"SQL Chat {len(st.session_state.chat_histories) + 1}"
+                st.session_state.chat_histories[new_chat_name] = []
+                st.session_state.active_chat = new_chat_name
+                st.session_state.chat = []
+                st.session_state.conversation_history = []
 
-        # Add question to chat
-        st.session_state.conversation_history.append({"role": "user", "content": question})
-        st.session_state.chat.append({"role": "user", "content": question})
-        
-        with st.spinner("Searching PDF documents..."):
-            try:
-                # Process PDF and get answer
-                answer = process_pdf(question, [pdf["path"] for pdf in st.session_state.uploaded_pdfs])
-                
-                # Add assistant response to chat
-                assistant_response = f"From PDF documents:\n\n{answer}"
-                st.session_state.conversation_history.append({
-                    "role": "assistant", 
-                    "content": assistant_response
-                })
-                st.session_state.chat.append({
-                    "role": "assistant", 
-                    "content": assistant_response
-                })
-                
-                # Update chat history if active chat exists
-                if st.session_state.active_chat:
-                    st.session_state.chat_histories[st.session_state.active_chat] = st.session_state.chat
-                    
-            except Exception as e:
-                st.error(f"Error processing PDF question: {str(e)}")
+            # Add the user question to the conversation history
+            st.session_state.conversation_history.append({"role": "user", "content": question})
+            
+            # Get the LLM response (assuming this is a function that queries the database and gets a response)
+            response, raw_result = get_llm_response(question)
+            
+            # Add the assistant's response to the conversation history
+            st.session_state.conversation_history.append({"role": "assistant", "content": response})
+            
+            # Update the main chat list
+            st.session_state.chat.append({"role": "user", "content": question})
+            st.session_state.chat.append({"role": "assistant", "content": response})
+            
+            # Save the chat to the active chat history
+            if st.session_state.active_chat:
+                st.session_state.chat_histories[st.session_state.active_chat] = list(st.session_state.chat)
 
-    def display_chat_messages(self):
-        # Display chat messages
+            # Update the sidebar chat history right after the query
+            if st.session_state.active_chat:
+                st.session_state.chat_histories[st.session_state.active_chat] = list(st.session_state.chat)
+
+            # Show the result and any options like downloading CSV
+            st.session_state.last_result = raw_result
+
+            # Optionally, display the results as CSV
+            # Inside the handle_mysql_chat function where the download button is created
+            if "last_result" in st.session_state and st.session_state.last_result:
+                csv = convert_result_to_csv(st.session_state.last_result)
+                st.download_button(
+                    label="Download table as CSV",
+                    data=csv,
+                    file_name="query_results.csv",
+                    mime="text/csv",
+                    key=f"download_button_{len(st.session_state.chat)}"  # Make the key unique
+                )
+
+
+        # Display all messages in the chat
         for i, chat in enumerate(st.session_state.chat):
             st.chat_message(chat['role']).markdown(chat['content'])
 
-            # If it's the last assistant message and has a result, show download
+            # Display the latest response in the assistant's message
             is_last_message = i == len(st.session_state.chat) - 1
             if chat['role'] == 'assistant' and is_last_message:
                 if "last_result" in st.session_state and st.session_state.last_result:
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                     csv = convert_result_to_csv(st.session_state.last_result)
                     st.download_button(
-                        label="⬇️ Download as CSV",
+                        label="Download table as CSV",
                         data=csv,
-                        file_name=f"query_results_{timestamp}.csv",
-                        mime="text/csv",
-                        key=f"download_{timestamp}"
+                        file_name="query_results.csv",
+                        mime="text/csv"
                     )
+
+    def setup_pdf_page(self):
+        st.title("PDF Documents")
+        self.handle_pdf_upload()
+        self.display_pdf_messages()
+        self.handle_pdf_chat()
+
+    def handle_pdf_upload(self):
+        st.subheader("Upload a document")
+        uploaded_files = st.file_uploader(
+            "Upload PDF document",
+            type=["pdf"],
+            key="file_uploader",
+            accept_multiple_files=True,
+            label_visibility="collapsed"
+        )
+
+        if uploaded_files:
+            new_files = set(file.name for file in uploaded_files)
+            old_files = set(file.name for file in st.session_state.uploaded_files)
+
+            if new_files != old_files:
+                st.session_state.pdf_assistant.clear()
+                st.session_state.pdf_messages = []
+                st.session_state.uploaded_files = uploaded_files
+
+                st.session_state.temp_file_paths = []
+
+                for file in uploaded_files:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tf:
+                        tf.write(file.getbuffer())
+                        file_path = tf.name
+                        st.session_state.temp_file_paths.append(file_path)
+
+                    with st.spinner(f"Processing {file.name}"):
+                        st.session_state.pdf_assistant.ingest(file_path)
+
+                st.session_state.pdf_processed = True
+                st.rerun()
+
+    def display_pdf_messages(self):
+        st.subheader("Chat")
+        for msg, is_user in st.session_state.pdf_messages:
+            st.chat_message("user" if is_user else "assistant").markdown(msg)
+
+        if st.session_state.pdf_processed:
+            
+            for file_path in st.session_state.temp_file_paths:
+                file_name = os.path.basename(file_path)
+                if st.button(f"View PDF: {file_name}", key=f"view_pdf_{file_name}"):
+                    self.show_pdf(file_path)
+
+    def show_pdf(self, file_path):
+        with open(file_path, "rb") as f:
+            base64_pdf = base64.b64encode(f.read()).decode("utf-8")
+
+    def handle_pdf_chat(self):
+        question = st.chat_input('Ask anything about the PDF')
+        if question and st.session_state.pdf_processed:
+            st.session_state.pdf_messages.append((question, True))
+
+            with st.spinner("Thinking..."):
+                response = st.session_state.pdf_assistant.ask(question)
+
+            st.session_state.pdf_messages.append((response, False))
+
+            if st.session_state.active_pdf_chat:
+                st.session_state.pdf_chat_histories[st.session_state.active_pdf_chat] = list(
+                    st.session_state.pdf_messages
+                )
+
+            st.rerun()
 
 
 if __name__ == "__main__":
-    MySQLChatApp()
+    IntegratedChatApp()
