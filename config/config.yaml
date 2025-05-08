@@ -11,7 +11,7 @@ database:
   name: "hrms"
 
 auth:
-  username: chirag
+  username: accurate
   password: hello
 
 chroma:
