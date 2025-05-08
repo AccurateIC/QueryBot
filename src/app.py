@@ -154,6 +154,20 @@ class IntegratedChatApp:
                     ]
 
     def handle_chat(self):
+        if not st.session_state.chat:
+            st.markdown(
+                """
+                <div style="padding: 1em; background-color: #f0f2f6; border-radius: 10px; margin-bottom: 1em;">
+                    <h3 style="margin-bottom: 0.5em;">Welcome to QueryBot!</h3>
+                    <p style="margin: 0;">You can ask questions about:</p>
+                    <ul>
+                        <li><b>Database</b> (e.g., "Show me the latest sales records")</li>
+                        <li><b>Uploaded PDF documents</b> (e.g., "Summarize this report")</li>
+                    </ul>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
         question = st.chat_input("Ask a question about PDF or Database")
 
         if st.session_state.active_chat is None:
