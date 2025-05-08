@@ -1,5 +1,3 @@
-#utils.py
-
 import mysql.connector
 import streamlit as st
 import re
@@ -11,6 +9,8 @@ from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 import io
+import requests
+
 from langchain_community.chat_models import ChatOllama
 from langchain.schema import LLMResult
 from langchain_core.callbacks.base import BaseCallbackHandler
@@ -19,13 +19,14 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 from schema_fetch import get_database_metadata
 
+# === CONFIG LOAD ===
 def load_config(path: str = "/home/chirag/Documents/QueryBot/config/config.yaml") -> Dict:
     with open(path, "r") as file:
         return yaml.safe_load(file)
 
-
 config = load_config()
 
+# === EVENT LOGGING ===
 @dataclass
 class Event:
     event: str
@@ -51,6 +52,7 @@ class LLMCallbackHandler(BaseCallbackHandler):
         with self.log_path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(asdict(event)) + "\n")
 
+# === LLM INITIALIZATION ===
 def initialize_llm() -> ChatOllama:
     return ChatOllama(
         model=config["llm"]["model"],
@@ -58,6 +60,7 @@ def initialize_llm() -> ChatOllama:
         callbacks=[LLMCallbackHandler(Path(config["llm"]["log_path"]))]
     )
 
+# === DATABASE CONNECTION ===
 def connect_database(host: str, user: str, password: str, database: str, port: int) -> None:
     try:
         connection = mysql.connector.connect(
@@ -74,6 +77,7 @@ def connect_database(host: str, user: str, password: str, database: str, port: i
     except mysql.connector.Error as e:
         st.error(f"❌ Failed to connect: {e}")
 
+# === RUN SQL ===
 def run_query(query: str) -> Tuple[Optional[List[Dict]], Optional[str]]:
     try:
         if "db" in st.session_state and st.session_state.db:
@@ -107,6 +111,7 @@ def extract_sql_query(text: str) -> str:
         return match.group(1).strip()
     return text.strip()
 
+# === MAIN SQL LLM FUNCTION ===
 def get_llm_response(question: str, maintain_context: bool = True) -> Tuple[str, Optional[List[Dict]]]:
     if "conversation_history" not in st.session_state:
         st.session_state.conversation_history = []
@@ -164,6 +169,7 @@ def get_llm_response(question: str, maintain_context: bool = True) -> Tuple[str,
 
     return f"```sql\n{sql_query}\n```\n\n{format_query_result(query_result)}", query_result
 
+# === CSV UTILITY ===
 def convert_result_to_csv(result: List[Dict]) -> Optional[bytes]:
     if not result:
         return None
@@ -171,3 +177,39 @@ def convert_result_to_csv(result: List[Dict]) -> Optional[bytes]:
     output = io.StringIO()
     df.to_csv(output, index=False)
     return output.getvalue().encode('utf-8')
+
+# === LLM QUERY TYPE CLASSIFIER ===
+def classify_query_type(question: str) -> str:
+    """
+    Classify the question as either SQL or RAG using LLM.
+    Returns "MySQL" or "rag".
+    """
+    print("Classifying question:", question)
+
+    prompt = (
+        "Classify the following user question as either 'MySQL' or 'RAG'.\n"
+        "Use 'MySQL' for database-related (structured data) questions, and 'RAG' for questions about documents or unstructured data.\n"
+        "Only respond with one word: 'MySQL' or 'RAG'.\n\n"
+        "Examples:\n"
+        "Q: How many employees are in the database?\nA: MySQL\n"
+        "Q: Summarize the uploaded PDF.\nA: RAG\n"
+        "Q: What is the total revenue in 2023?\nA: MySQL\n"
+        "Q: What is this document about?\nA: RAG\n\n"
+        "Q: give their complete details?\nA: MySQL\n\n"
+        f"Q: {question}\nA:"
+    )
+
+    payload = {
+        "model": config["llm"]["model"],
+        "prompt": prompt,
+        "stream": False
+    }
+
+    try:
+        response = requests.post(config["llm"]["base_url"] + "/api/generate", json=payload)
+        result = response.json()["response"].strip().lower()
+        print("Classification result:", result)
+        return "MySQL" if "mysql" in result else "rag"
+    except Exception as e:
+        st.warning(f"Failed to classify query type: {e}")
+        return "rag"  # fallback to RAG if unsure

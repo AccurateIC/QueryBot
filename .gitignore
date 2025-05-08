@@ -1,3 +1,5 @@
 prompts.jsonl
 __pycache__
 chroma_db/
+app.log
+temp_pdfs/
