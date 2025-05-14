@@ -11,8 +11,9 @@ database:
   name: "hrms"
 
 auth:
-  username: accurate
-  password: hello
+  accurate:
+    password: "hello"
+    role: "HR"
 
 chroma:
   persist_directory: "./chroma_db"

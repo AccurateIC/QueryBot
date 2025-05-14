@@ -10,12 +10,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 import io
 import requests
-
 from langchain_community.chat_models import ChatOllama
 from langchain.schema import LLMResult
 from langchain_core.callbacks.base import BaseCallbackHandler
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import HumanMessage, AIMessage
+from sql_metadata import Parser
 
 from schema_fetch import get_database_metadata
 
@@ -77,8 +77,25 @@ def connect_database(host: str, user: str, password: str, database: str, port: i
     except mysql.connector.Error as e:
         st.error(f"❌ Failed to connect: {e}")
 
+# === ROLE-BASED ACCESS CHECK ===
+def check_role_permissions(query: str) -> Tuple[bool, Optional[str]]:
+    role = st.session_state.get("role", "employee")
+    restricted = config.get("roles", {}).get(role, {}).get("restricted_columns", [])
+
+    parser = Parser(query)
+    queried_columns = parser.columns_dict.get("select", [])
+
+    for column in queried_columns:
+        if column in restricted:
+            return False, f"Access to column '{column}' is restricted for your role ({role})."
+    return True, None
+
 # === RUN SQL ===
 def run_query(query: str) -> Tuple[Optional[List[Dict]], Optional[str]]:
+    is_allowed, error = check_role_permissions(query)
+    if not is_allowed:
+        return None, f"⛔️ {error}"
+
     try:
         if "db" in st.session_state and st.session_state.db:
             connection, cursor = st.session_state.db
@@ -180,10 +197,6 @@ def convert_result_to_csv(result: List[Dict]) -> Optional[bytes]:
 
 # === LLM QUERY TYPE CLASSIFIER ===
 def classify_query_type(question: str) -> str:
-    """
-    Classify the question as either SQL or RAG using LLM.
-    Returns "MySQL" or "rag".
-    """
     print("Classifying question:", question)
 
     prompt = (
@@ -212,4 +225,4 @@ def classify_query_type(question: str) -> str:
         return "MySQL" if "mysql" in result else "rag"
     except Exception as e:
         st.warning(f"Failed to classify query type: {e}")
-        return "rag"  # fallback to RAG if unsure
+        return "rag"

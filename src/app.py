@@ -16,6 +16,7 @@ class IntegratedChatApp:
             "chat_histories": {},
             "active_chat": None,
             "logged_in": False,
+            "user_role": None,
             "pdf_assistant": ChatPDF(),
             "pdf_messages": [],
             "pdf_processed": False,
@@ -58,7 +59,6 @@ class IntegratedChatApp:
             username = st.text_input("Username", key="login_username", label_visibility="collapsed", placeholder="Username", max_chars=20)
             password = st.text_input("Password", type="password", key="login_password", label_visibility="collapsed", placeholder="Password", max_chars=20)
 
-            # Add custom CSS for styling the login button
             st.markdown("""
                 <style>
                     .login-button {
@@ -78,15 +78,16 @@ class IntegratedChatApp:
                 </style>
             """, unsafe_allow_html=True)
 
-            # Login button
             if st.button("Login", key="login_button", help="Click to login"):
                 submitted = True
             else:
                 submitted = False
 
         if 'submitted' in locals() and submitted:
-            if username == config["auth"]["username"] and password == config["auth"]["password"]:
+            auth_config = config["auth"]
+            if username in auth_config and password == auth_config[username]["password"]:
                 st.session_state.logged_in = True
+                st.session_state.user_role = auth_config[username]["role"]
                 st.success("Login successful! Redirecting to the app...")
                 st.rerun()
             else:
@@ -155,8 +156,7 @@ class IntegratedChatApp:
 
     def handle_chat(self):
         if not st.session_state.chat:
-            st.markdown(
-                """
+            st.markdown("""
                 <div style="padding: 1em; background-color: #f0f2f6; border-radius: 10px; margin-bottom: 1em;">
                     <h3 style="margin-bottom: 0.5em;">Welcome to QueryBot!</h3>
                     <p style="margin: 0;">You can ask questions about:</p>
@@ -165,9 +165,8 @@ class IntegratedChatApp:
                         <li><b>Uploaded PDF documents</b> (e.g., "Summarize this report")</li>
                     </ul>
                 </div>
-                """,
-                unsafe_allow_html=True
-            )
+            """, unsafe_allow_html=True)
+
         question = st.chat_input("Ask a question about PDF or Database")
 
         if st.session_state.active_chat is None:
@@ -195,7 +194,7 @@ class IntegratedChatApp:
                     st.error("Please connect to the database first.")
                     return
 
-                response, raw_result = get_llm_response(question)
+                response, raw_result = get_llm_response(question, st.session_state.user_role)
                 st.chat_message("assistant").markdown(response)
                 st.session_state.chat.append({"role": "assistant", "content": response})
                 st.session_state.chat_histories[st.session_state.active_chat] = list(st.session_state.chat)
