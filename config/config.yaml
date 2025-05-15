@@ -11,8 +11,20 @@ database:
   name: "hrms"
 
 auth:
-  username: accurate
-  password: hello
+  users:
+    - username: "accurate"
+      password: "hello"
+      role: "hr"
+    - username: "emp1"
+      password: "hello"
+      role: "employee"
+
+access_control:
+  restricted_columns:
+    employee:
+      employees: ["salary", "phone_number"]
+      attendance: []
+      departments: []
 
 chroma:
   persist_directory: "./chroma_db"
