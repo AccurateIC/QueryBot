@@ -10,12 +10,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 import io
 import requests
+
 from langchain_community.chat_models import ChatOllama
 from langchain.schema import LLMResult
 from langchain_core.callbacks.base import BaseCallbackHandler
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import HumanMessage, AIMessage
-from sql_metadata import Parser
 
 from schema_fetch import get_database_metadata
 
@@ -25,6 +25,70 @@ def load_config(path: str = "/home/chirag/Documents/QueryBot/config/config.yaml"
         return yaml.safe_load(file)
 
 config = load_config()
+
+# === ROLE-BASED ACCESS CONTROL ===
+ROLE_COLUMN_RESTRICTIONS = {
+    "employee": {
+        "employees": ["salary", "ssn", "personal_email", "bank_account"],
+        "performance_reviews": ["confidential_notes", "manager_comments"],
+        "payroll": ["base_salary", "bonus_amount", "tax_information"],
+    }
+}
+
+def check_column_access(query: str, role: str) -> Tuple[bool, str]:
+    """Check if query accesses restricted columns for the given role"""
+    if role == "hr":
+        return True, ""  # HR has full access
+    
+    restricted_columns = config["access_control"]["restricted_columns"].get(role, {})
+    
+    # Simple check for restricted columns in query
+    for table, columns in restricted_columns.items():
+        for column in columns:
+            # Case-insensitive check for column references
+            pattern = re.compile(rf"\b{column}\b", re.IGNORECASE)
+            if pattern.search(query):
+                return False, f"Access denied to column '{column}' in table '{table}'"
+    
+    return True, ""
+
+def filter_restricted_columns(ddl: str, role: str) -> str:
+    """Filter out restricted columns from DDL based on role"""
+    if role == "hr":
+        return ddl
+    
+    restricted_columns = config["access_control"]["restricted_columns"].get(role, {})
+    if not restricted_columns:
+        return ddl
+    
+    filtered_ddl = []
+    for line in ddl.split('\n'):
+        skip_line = False
+        for table, columns in restricted_columns.items():
+            if f"TABLE {table}" in line or f"`{table}`" in line:
+                for column in columns:
+                    if f"`{column}`" in line or f"{column} " in line:
+                        skip_line = True
+                        break
+        if not skip_line:
+            filtered_ddl.append(line)
+    
+    return '\n'.join(filtered_ddl)
+
+def handle_restricted_response(question: str, sql_query: str) -> str:
+    """Handle cases where employee asks directly for restricted columns"""
+    restricted_columns = config["access_control"]["restricted_columns"].get("employee", {})
+    
+    # Check for restricted column names in question
+    for table, columns in restricted_columns.items():
+        for column in columns:
+            if column.lower() in question.lower():
+                return (f"Your role doesn't have permission to access '{column}' data. "
+                       f"Please contact HR if you need this information.")
+    
+    return (f"```sql\n{sql_query}\n```\n\n"
+           "Your query was filtered to remove columns your role cannot access. "
+           "If you're missing expected data, it may be due to access restrictions.")
 
 # === EVENT LOGGING ===
 @dataclass
@@ -77,25 +141,8 @@ def connect_database(host: str, user: str, password: str, database: str, port: i
     except mysql.connector.Error as e:
         st.error(f"❌ Failed to connect: {e}")
 
-# === ROLE-BASED ACCESS CHECK ===
-def check_role_permissions(query: str) -> Tuple[bool, Optional[str]]:
-    role = st.session_state.get("role", "employee")
-    restricted = config.get("roles", {}).get(role, {}).get("restricted_columns", [])
-
-    parser = Parser(query)
-    queried_columns = parser.columns_dict.get("select", [])
-
-    for column in queried_columns:
-        if column in restricted:
-            return False, f"Access to column '{column}' is restricted for your role ({role})."
-    return True, None
-
 # === RUN SQL ===
 def run_query(query: str) -> Tuple[Optional[List[Dict]], Optional[str]]:
-    is_allowed, error = check_role_permissions(query)
-    if not is_allowed:
-        return None, f"⛔️ {error}"
-
     try:
         if "db" in st.session_state and st.session_state.db:
             connection, cursor = st.session_state.db
@@ -130,11 +177,11 @@ def extract_sql_query(text: str) -> str:
 
 # === MAIN SQL LLM FUNCTION ===
 def get_llm_response(question: str, maintain_context: bool = True) -> Tuple[str, Optional[List[Dict]]]:
-    if "conversation_history" not in st.session_state:
-        st.session_state.conversation_history = []
+    if "user_role" not in st.session_state:
+        return "Please login first", None
 
     ddl, _ = get_database_metadata()
-    schema_info = f"{ddl}"
+    schema_info = filter_restricted_columns(ddl, st.session_state.user_role)
 
     context_messages = []
     if maintain_context and st.session_state.conversation_history:
@@ -173,6 +220,11 @@ def get_llm_response(question: str, maintain_context: bool = True) -> Tuple[str,
     response = chain.invoke(formatted_prompt)
     sql_query = extract_sql_query(response.content.strip())
 
+    # Check for restricted columns before executing
+    access_allowed, denial_reason = check_column_access(sql_query, st.session_state.user_role)
+    if not access_allowed:
+        return f"```sql\n{sql_query}\n```\n\n❌ {denial_reason}", None
+
     query_result, error = run_query(sql_query)
 
     st.session_state.conversation_history.append({"role": "user", "content": question})
@@ -197,8 +249,7 @@ def convert_result_to_csv(result: List[Dict]) -> Optional[bytes]:
 
 # === LLM QUERY TYPE CLASSIFIER ===
 def classify_query_type(question: str) -> str:
-    print("Classifying question:", question)
-
+    """Classify the question as either SQL or RAG using LLM."""
     prompt = (
         "Classify the following user question as either 'MySQL' or 'RAG'.\n"
         "Use 'MySQL' for database-related (structured data) questions, and 'RAG' for questions about documents or unstructured data.\n"
@@ -208,7 +259,6 @@ def classify_query_type(question: str) -> str:
         "Q: Summarize the uploaded PDF.\nA: RAG\n"
         "Q: What is the total revenue in 2023?\nA: MySQL\n"
         "Q: What is this document about?\nA: RAG\n\n"
-        "Q: give their complete details?\nA: MySQL\n\n"
         f"Q: {question}\nA:"
     )
 
@@ -221,8 +271,22 @@ def classify_query_type(question: str) -> str:
     try:
         response = requests.post(config["llm"]["base_url"] + "/api/generate", json=payload)
         result = response.json()["response"].strip().lower()
-        print("Classification result:", result)
         return "MySQL" if "mysql" in result else "rag"
     except Exception as e:
         st.warning(f"Failed to classify query type: {e}")
-        return "rag"
+        return "rag"  # fallback to RAG if unsure
+
+def handle_restricted_response(question: str, sql_query: str) -> str:
+    """Handle cases where employee asks directly for restricted columns"""
+    restricted_columns = ROLE_COLUMN_RESTRICTIONS.get("employee", {})
+    
+    # Check for restricted column names in question
+    for table, columns in restricted_columns.items():
+        for column in columns:
+            if column.lower() in question.lower():
+                return (f"Your role doesn't have permission to access '{column}' data. "
+                       f"Please contact HR if you need this information.")
+    
+    return (f"```sql\n{sql_query}\n```\n\n"
+           "Your query was filtered to remove columns your role cannot access. "
+           "If you're missing expected data, it may be due to access restrictions.")
