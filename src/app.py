@@ -54,16 +54,40 @@ class IntegratedChatApp:
             unsafe_allow_html=True
         )
 
+        # Center username and password inputs
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
-            username = st.text_input("Username", key="login_username", label_visibility="collapsed", placeholder="Username", max_chars=20)
-            password = st.text_input("Password", type="password", key="login_password", label_visibility="collapsed", placeholder="Password", max_chars=20)
+            username = st.text_input(
+                "Username", 
+                key="login_username", 
+                label_visibility="collapsed", 
+                placeholder="Username", 
+                max_chars=20
+            )
+            password = st.text_input(
+                "Password", 
+                type="password", 
+                key="login_password", 
+                label_visibility="collapsed", 
+                placeholder="Password", 
+                max_chars=20
+            )
 
+            # Wrap the button in a div with style to center it horizontally
+            button_html = """
+            <div style="display: flex; justify-content: center; margin-top: 10px;">
+                <button style="width: 100%; max-width: 200px;">Login</button>
+            </div>
+            """
+
+            # But Streamlit button can't be replaced with HTML button directly,
+            # So instead we do normal st.button + add CSS to center it
+
+            # Add the button inside col2, then center it with CSS using st.markdown and custom style
             if st.button("Login", key="login_button", help="Click to login"):
                 authenticated = False
                 for user in config["auth"]["users"]:
-                    if (username == user["username"] and 
-                        password == user["password"]):
+                    if (username == user["username"] and password == user["password"]):
                         st.session_state.logged_in = True
                         st.session_state.user_role = user["role"]
                         authenticated = True
@@ -75,6 +99,23 @@ class IntegratedChatApp:
                 else:
                     st.error("Invalid username or password!")
 
+        # Custom CSS to center the button inside the middle column
+        st.markdown(
+            """
+            <style>
+            div.stButton > button:first-child {
+                margin: 0 auto;
+                display: block;
+                max-width: 200px;
+                width: 100%;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
+
+
+
     def get_base64_image(self, image_path):
         with open(image_path, "rb") as img_file:
             return base64.b64encode(img_file.read()).decode()
@@ -82,17 +123,30 @@ class IntegratedChatApp:
     def setup_sidebar(self):
         with st.sidebar:
             st.image("/home/chirag/Documents/QueryBot/src/logo.png", width=200)
-            
-            # Show role information
+
             if st.session_state.logged_in:
-                st.subheader(f"Logged in as: {st.session_state.user_role.upper()}")
-            
-            # Only show database connection to HR
+                user_role = st.session_state.user_role.upper()
+                st.markdown(
+                    f"""
+                    <p style="
+                        font-weight: 700; 
+                        font-size: 1.1em; 
+                        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                        user-select: none;
+                    ">
+                        <span style="background-color: #ffea00; padding: 4px 8px; border-radius: 4px; color: #333;">
+                            Role: {user_role}
+                        </span> 
+                    </p>
+                    """,
+                    unsafe_allow_html=True
+                )
+
             if st.session_state.user_role == "hr":
                 st.subheader("Database Connection")
                 self.db_connection_ui()
             else:
-                st.info("Employee access: Limited database columns available")
+                st.info("Employee access: Restricted use of database")
 
             st.subheader("Upload a Document")
             uploaded_files = st.file_uploader(
@@ -106,6 +160,50 @@ class IntegratedChatApp:
 
             st.subheader("Chat History")
             self.chat_history_ui()
+
+            # --- LOGOUT BUTTON AT THE VERY END ---
+            if st.session_state.logged_in:
+                st.markdown("<br>", unsafe_allow_html=True)  # Add a bit of spacing
+
+                # Custom CSS to style the Logout button red
+                st.markdown(
+                    """
+                    <style>
+                    div.stButton > button:first-child {
+                        background-color: #e63946;  /* red */
+                        color: white;
+                        border: none;
+                        padding: 8px 24px;
+                        border-radius: 6px;
+                        font-weight: bold;
+                        width: 100%;
+                        max-width: 200px;
+                        margin: 0 auto;
+                        display: block;
+                    }
+                    div.stButton > button:first-child:hover {
+                        background-color: #d62828;
+                    }
+                    </style>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+                if st.button("Logout"):
+                    # Clear login-related session state
+                    st.session_state.logged_in = False
+                    st.session_state.user_role = None
+                    st.session_state.chat = []
+                    st.session_state.chat_histories = {}
+                    st.session_state.active_chat = None
+                    st.session_state.pdf_messages = []
+                    st.session_state.pdf_processed = False
+                    st.session_state.chat_mode = None
+                    st.session_state.conversation_history = []
+                    # Reload app
+                    st.rerun()
+
+
 
     def db_connection_ui(self):
         with st.expander("Database Settings", expanded=True):
@@ -156,8 +254,7 @@ class IntegratedChatApp:
                 </ul>
             """
             if st.session_state.user_role == "employee":
-                welcome_msg += """
-                <p style="margin-top: 1em;"><b>Note:</b> As an employee, your access to certain database columns is restricted.</p>
+                welcome_msg += """As an employee, your access to database is restricted.
                 """
             welcome_msg += "</div>"
             st.markdown(welcome_msg, unsafe_allow_html=True)
