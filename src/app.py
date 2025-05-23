@@ -2,7 +2,7 @@ import os
 import tempfile
 import base64
 import streamlit as st
-from utils import config, connect_database, get_llm_response, convert_result_to_csv, classify_query_type
+from utils import config, connect_database, get_llm_response, convert_result_to_csv, classify_query_type, handle_restricted_response
 from pdf_util import ChatPDF
 
 class IntegratedChatApp:
@@ -16,6 +16,7 @@ class IntegratedChatApp:
             "chat_histories": {},
             "active_chat": None,
             "logged_in": False,
+            "user_role": None,
             "pdf_assistant": ChatPDF(),
             "pdf_messages": [],
             "pdf_processed": False,
@@ -58,39 +59,21 @@ class IntegratedChatApp:
             username = st.text_input("Username", key="login_username", label_visibility="collapsed", placeholder="Username", max_chars=20)
             password = st.text_input("Password", type="password", key="login_password", label_visibility="collapsed", placeholder="Password", max_chars=20)
 
-            # Add custom CSS for styling the login button
-            st.markdown("""
-                <style>
-                    .login-button {
-                        background-color: #007bff;
-                        color: white;
-                        padding: 0.5em 2em;
-                        border: none;
-                        border-radius: 8px;
-                        font-size: 16px;
-                        cursor: pointer;
-                        display: block;
-                        margin: 0 auto;
-                    }
-                    .login-button:hover {
-                        background-color: #0056b3;
-                    }
-                </style>
-            """, unsafe_allow_html=True)
-
-            # Login button
             if st.button("Login", key="login_button", help="Click to login"):
-                submitted = True
-            else:
-                submitted = False
-
-        if 'submitted' in locals() and submitted:
-            if username == config["auth"]["username"] and password == config["auth"]["password"]:
-                st.session_state.logged_in = True
-                st.success("Login successful! Redirecting to the app...")
-                st.rerun()
-            else:
-                st.error("Invalid username or password!")
+                authenticated = False
+                for user in config["auth"]["users"]:
+                    if (username == user["username"] and 
+                        password == user["password"]):
+                        st.session_state.logged_in = True
+                        st.session_state.user_role = user["role"]
+                        authenticated = True
+                        break
+                
+                if authenticated:
+                    st.success("Login successful! Redirecting to the app...")
+                    st.rerun()
+                else:
+                    st.error("Invalid username or password!")
 
     def get_base64_image(self, image_path):
         with open(image_path, "rb") as img_file:
@@ -99,9 +82,17 @@ class IntegratedChatApp:
     def setup_sidebar(self):
         with st.sidebar:
             st.image("/home/chirag/Documents/QueryBot/src/logo.png", width=200)
-
-            st.subheader("Database Connection")
-            self.db_connection_ui()
+            
+            # Show role information
+            if st.session_state.logged_in:
+                st.subheader(f"Logged in as: {st.session_state.user_role.upper()}")
+            
+            # Only show database connection to HR
+            if st.session_state.user_role == "hr":
+                st.subheader("Database Connection")
+                self.db_connection_ui()
+            else:
+                st.info("Employee access: Limited database columns available")
 
             st.subheader("Upload a Document")
             uploaded_files = st.file_uploader(
@@ -155,19 +146,22 @@ class IntegratedChatApp:
 
     def handle_chat(self):
         if not st.session_state.chat:
-            st.markdown(
+            welcome_msg = """
+            <div style="padding: 1em; background-color: #f0f2f6; border-radius: 10px; margin-bottom: 1em;">
+                <h3 style="margin-bottom: 0.5em;">Welcome to QueryBot!</h3>
+                <p style="margin: 0;">You can ask questions about:</p>
+                <ul>
+                    <li><b>Database</b> (e.g., "Show me employee information")</li>
+                    <li><b>Uploaded PDF documents</b> (e.g., "Summarize this report")</li>
+                </ul>
+            """
+            if st.session_state.user_role == "employee":
+                welcome_msg += """
+                <p style="margin-top: 1em;"><b>Note:</b> As an employee, your access to certain database columns is restricted.</p>
                 """
-                <div style="padding: 1em; background-color: #f0f2f6; border-radius: 10px; margin-bottom: 1em;">
-                    <h3 style="margin-bottom: 0.5em;">Welcome to QueryBot!</h3>
-                    <p style="margin: 0;">You can ask questions about:</p>
-                    <ul>
-                        <li><b>Database</b> (e.g., "Show me the latest sales records")</li>
-                        <li><b>Uploaded PDF documents</b> (e.g., "Summarize this report")</li>
-                    </ul>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+            welcome_msg += "</div>"
+            st.markdown(welcome_msg, unsafe_allow_html=True)
+            
         question = st.chat_input("Ask a question about PDF or Database")
 
         if st.session_state.active_chat is None:
@@ -196,11 +190,16 @@ class IntegratedChatApp:
                     return
 
                 response, raw_result = get_llm_response(question)
+                
+                # Handle restricted access differently for employees
+                if st.session_state.user_role == "employee":
+                    response = handle_restricted_response(question, response)
+                    
                 st.chat_message("assistant").markdown(response)
                 st.session_state.chat.append({"role": "assistant", "content": response})
                 st.session_state.chat_histories[st.session_state.active_chat] = list(st.session_state.chat)
 
-                if raw_result:
+                if raw_result and st.session_state.user_role == "hr":
                     csv = convert_result_to_csv(raw_result)
                     st.download_button(
                         label="Download table as CSV",
